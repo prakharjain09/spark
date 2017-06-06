@@ -102,6 +102,8 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
+  private var cacheRecoveryManager: CacheRecoveryManager = _
+
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
   private val maxNumExecutors = conf.get(DYN_ALLOCATION_MAX_EXECUTORS)
@@ -113,6 +115,9 @@ private[spark] class ExecutorAllocationManager(
   // Same as above, but used only after `schedulerBacklogTimeoutS` is exceeded
   private val sustainedSchedulerBacklogTimeoutS =
     conf.get(DYN_ALLOCATION_SUSTAINED_SCHEDULER_BACKLOG_TIMEOUT)
+
+  // whether or not to try and save cached data when executors are deallocated
+  private val recoverCachedData = conf.get(DYN_ALLOCATION_CACHE_RECOVERY)
 
   // During testing, the methods to actually kill and add executors are mocked out
   private val testing = conf.get(DYN_ALLOCATION_TESTING)
@@ -234,12 +239,19 @@ private[spark] class ExecutorAllocationManager(
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
 
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
+
+    if (recoverCachedData) {
+      cacheRecoveryManager = CacheRecoveryManager(this, conf)
+    }
   }
 
   /**
    * Stop the allocation manager.
    */
   def stop(): Unit = {
+    if (cacheRecoveryManager != null) {
+      cacheRecoveryManager.stop()
+    }
     executor.shutdown()
     executor.awaitTermination(10, TimeUnit.SECONDS)
   }

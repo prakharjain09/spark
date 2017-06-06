@@ -139,6 +139,9 @@ class BlockManagerMasterEndpoint(
       removeExecutor(execId)
       context.reply(true)
 
+    case RecoverLatestRDDBlock(execId, excluded) =>
+      recoverLatestRDDBlock(execId, excluded, context)
+
     case StopBlockManagerMaster =>
       context.reply(true)
       stop()
@@ -269,7 +272,8 @@ class BlockManagerMasterEndpoint(
         val candidateBMId = blockLocations(i)
         blockManagerInfo.get(candidateBMId).foreach { bm =>
           val remainingLocations = locations.toSeq.filter(bm => bm != candidateBMId)
-          val replicateMsg = ReplicateBlock(blockId, remainingLocations, maxReplicas)
+          val replicateMsg =
+            ReplicateBlock(blockId, remainingLocations, Seq.empty[BlockManagerId], maxReplicas)
           bm.slaveEndpoint.ask[Boolean](replicateMsg)
         }
       }
@@ -283,6 +287,44 @@ class BlockManagerMasterEndpoint(
   private def removeExecutor(execId: String): Unit = {
     logInfo("Trying to remove executor " + execId + " from BlockManagerMaster.")
     blockManagerIdByExecutor.get(execId).foreach(removeBlockManager)
+  }
+
+  private def recoverLatestRDDBlock(
+      execId: String,
+      excludeExecutors: Seq[String],
+      context: RpcCallContext): Unit = {
+    logDebug(s"Replicating first cached block on $execId")
+    val excluded = excludeExecutors.flatMap(blockManagerIdByExecutor.get)
+    val response: Option[Future[Boolean]] = for {
+      blockManagerId <- blockManagerIdByExecutor.get(execId)
+      info <- blockManagerInfo.get(blockManagerId)
+      blocks = info.exclusiveCachedBlocks.collect { case r: RDDBlockId => r }
+      // As a heuristic, prioritize replicating the latest rdd. If this succeeds,
+      // CacheRecoveryManager will try to replicate the remaining rdds.
+      firstBlock <- if (blocks.isEmpty) None else Some(blocks.maxBy(_.rddId))
+      replicaSet <- blockLocations.asScala.get(firstBlock)
+      // Add 2 to force this block to be replicated to one new executor.
+      maxReps = replicaSet.size + 2
+      isMem = info.getStatus(firstBlock).exists { _.storageLevel.useMemory }
+    } yield {
+      if (isMem) {
+        val msg = ReplicateBlock(firstBlock, replicaSet.toSeq, excluded, maxReps)
+        info.slaveEndpoint.ask[Boolean](msg)
+          .flatMap { _ =>
+            logTrace(s"Replicated block $firstBlock on executor $execId")
+            replicaSet -= blockManagerId
+            updateBlockInfo(blockManagerId, firstBlock, StorageLevel.NONE, 0, 0)
+            info.slaveEndpoint.ask[Boolean](RemoveBlock(firstBlock))
+          }
+      } else {
+        logTrace(s"Did not replicate block $firstBlock on executor $execId")
+        replicaSet -= blockManagerId
+        updateBlockInfo(blockManagerId, firstBlock, StorageLevel.NONE, 0, 0)
+        info.slaveEndpoint.ask[Boolean](RemoveBlock(firstBlock))
+      }
+    }
+
+    response.getOrElse(Future.successful(false)).foreach(context.reply)
   }
 
   // Remove a block from the slaves that have it. This can only be used to remove
@@ -572,6 +614,7 @@ private[spark] class BlockManagerInfo(
 
   // Mapping from block id to its status.
   private val _blocks = new JHashMap[BlockId, BlockStatus]
+  private val _exclusiveCachedBlocks = new mutable.HashSet[BlockId]
 
   def getStatus(blockId: BlockId): Option[BlockStatus] = Option(_blocks.get(blockId))
 
@@ -640,6 +683,14 @@ private[spark] class BlockManagerInfo(
         }
       }
 
+      if (!blockId.isBroadcast) {
+        if (!externalShuffleServiceEnabled || !storageLevel.useDisk) {
+          _exclusiveCachedBlocks += blockId
+        } else if (blockExists) {
+          // removing block from the exclusive cached blocks when updated to non-exclusive
+          _exclusiveCachedBlocks -= blockId
+        }
+      }
       externalShuffleServiceBlockStatus.foreach { shuffleServiceBlocks =>
         if (!blockId.isBroadcast && blockStatus.diskSize > 0) {
           shuffleServiceBlocks.put(blockId, blockStatus)
@@ -648,6 +699,7 @@ private[spark] class BlockManagerInfo(
     } else if (blockExists) {
       // If isValid is not true, drop the block.
       _blocks.remove(blockId)
+      _exclusiveCachedBlocks -= blockId
       externalShuffleServiceBlockStatus.foreach { blockStatus =>
         blockStatus.remove(blockId)
       }
@@ -671,6 +723,7 @@ private[spark] class BlockManagerInfo(
         blockStatus.remove(blockId)
       }
     }
+    _exclusiveCachedBlocks -= blockId
   }
 
   def remainingMem: Long = _remainingMem
@@ -678,6 +731,8 @@ private[spark] class BlockManagerInfo(
   def lastSeenMs: Long = _lastSeenMs
 
   def blocks: JHashMap[BlockId, BlockStatus] = _blocks
+
+  def exclusiveCachedBlocks: collection.Set[BlockId] = _exclusiveCachedBlocks
 
   override def toString: String = "BlockManagerInfo " + timeMs + " " + _remainingMem
 

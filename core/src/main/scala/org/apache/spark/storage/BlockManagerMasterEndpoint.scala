@@ -24,10 +24,12 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Random
-
-import org.apache.spark.SparkConf
+import org.apache.spark.{SecurityManager, SparkConf}
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.internal.Logging
+import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.config.SHUFFLE_CLEANUP_FOR_ESS_ENABLED
+import org.apache.spark.network.netty.SparkTransportConf
+import org.apache.spark.network.shuffle.ExternalShuffleClient
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerMessages._
@@ -42,7 +44,8 @@ class BlockManagerMasterEndpoint(
     override val rpcEnv: RpcEnv,
     val isLocal: Boolean,
     conf: SparkConf,
-    listenerBus: LiveListenerBus)
+    listenerBus: LiveListenerBus,
+    securityManager: SecurityManager)
   extends ThreadSafeRpcEndpoint with Logging {
 
   // Mapping from block manager id to the block manager's information.
@@ -68,6 +71,23 @@ class BlockManagerMasterEndpoint(
   }
 
   val proactivelyReplicate = conf.get("spark.storage.replication.proactive", "false").toBoolean
+
+  private val essEnabled = conf.getBoolean("spark.shuffle.service.enabled", false)
+  private val shuffleCleanupEnabled = conf.get(SHUFFLE_CLEANUP_FOR_ESS_ENABLED)
+  private val essPort = conf.getInt("spark.shuffle.service.port", 7337)
+  private lazy val transConf = {
+    val sparkConf = if (conf.contains("spark.shuffleCleanup.io.connectionTimeout")) {
+      conf
+    } else {
+      // If spark.shuffleCleanup.io.connectionTimeout is not set, then set it to 10s.
+      // If we don't set this here, it will become 120 seconds by default which may cause issues
+      conf.clone.set("spark.quboleShuffleCleanup.io.connectionTimeout", s"10s")
+    }
+    SparkTransportConf.fromSparkConf(sparkConf, "shuffleCleanup")
+  }
+  private lazy val externalShuffleClient = new ExternalShuffleClient(transConf, securityManager,
+    securityManager.isAuthenticationEnabled(), conf.get(config.SHUFFLE_REGISTRATION_TIMEOUT))
+  private val executorHosts = mutable.HashSet.empty[String]
 
   logInfo("BlockManagerMasterEndpoint up")
 
@@ -176,11 +196,23 @@ class BlockManagerMasterEndpoint(
   private def removeShuffle(shuffleId: Int): Future[Seq[Boolean]] = {
     // Nothing to do in the BlockManagerMasterEndpoint data structures
     val removeMsg = RemoveShuffle(shuffleId)
-    Future.sequence(
+    Future.sequence {
+      if (shuffleCleanupEnabled) {
+        executorHosts.foreach { essHostname =>
+          try {
+            externalShuffleClient.deleteShuffleData(essHostname, essPort, shuffleId)
+          } catch {
+            case e: Exception =>
+              logWarning(s"Error while contacting ESS on host $essHostname to " +
+                s"delete shuffle files for shuffleId $shuffleId", e)
+          }
+        }
+      }
+
       blockManagerInfo.values.map { bm =>
         bm.slaveEndpoint.ask[Boolean](removeMsg)
       }.toSeq
-    )
+    }
   }
 
   /**
@@ -364,6 +396,8 @@ class BlockManagerMasterEndpoint(
       idWithoutTopologyInfo.host,
       idWithoutTopologyInfo.port,
       topologyMapper.getTopologyForHost(idWithoutTopologyInfo.host))
+
+    executorHosts.add(idWithoutTopologyInfo.host)
 
     val time = System.currentTimeMillis()
     if (!blockManagerInfo.contains(id)) {

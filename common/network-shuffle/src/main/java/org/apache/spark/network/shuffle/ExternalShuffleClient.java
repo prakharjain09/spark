@@ -23,6 +23,8 @@ import java.util.List;
 
 import com.codahale.metrics.MetricSet;
 import com.google.common.collect.Lists;
+import org.apache.spark.network.client.RpcResponseCallback;
+import org.apache.spark.network.shuffle.protocol.DeleteShuffle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -142,6 +144,28 @@ public class ExternalShuffleClient extends ShuffleClient {
     try (TransportClient client = clientFactory.createUnmanagedClient(host, port)) {
       ByteBuffer registerMessage = new RegisterExecutor(appId, execId, executorInfo).toByteBuffer();
       client.sendRpcSync(registerMessage, registrationTimeoutMs);
+    }
+  }
+
+  public void deleteShuffleData(
+      String host,
+      int port,
+      int shuffleId) throws IOException, InterruptedException {
+    checkInit();
+    try (TransportClient client = clientFactory.createUnmanagedClient(host, port)) {
+      ByteBuffer deleteShuffleMessage = new DeleteShuffle(appId, shuffleId).toByteBuffer();
+      client.sendRpc(deleteShuffleMessage, new RpcResponseCallback() {
+        @Override
+        public void onSuccess(ByteBuffer response) {
+          logger.debug("Successfully sent DeleteShuffle message to ESS for shuffleId {}",
+              shuffleId);
+        }
+
+        @Override
+        public void onFailure(Throwable e) {
+          logger.debug("Error while contacting ESS on host {}", host, e);
+        }
+      });
     }
   }
 

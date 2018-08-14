@@ -21,6 +21,8 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -144,6 +146,43 @@ public class JavaUtils {
         throw new IOException("Failed to delete: " + file.getAbsolutePath());
       }
     }
+  }
+
+  public static void deleteRecursively(File parentDir, String fileRegexPath,
+                                                         String directoryRegexPath) throws IOException {
+
+    if (parentDir == null || fileRegexPath == null || directoryRegexPath == null) {
+      throw new IllegalArgumentException("parentDir, fileRegexPath " +
+          "and directoryRegexPath should be non null");
+    }
+
+    if (!parentDir.exists() || !parentDir.isDirectory()) {
+      return;
+    }
+
+    final PathMatcher pathMatcher = FileSystems.getDefault().getPathMatcher(
+        "regex:.*/" + fileRegexPath);
+    final PathMatcher dirMatcher = FileSystems.getDefault().getPathMatcher(
+        "regex:.*/" + directoryRegexPath);
+
+    Files.walkFileTree(parentDir.toPath(), new SimpleFileVisitor<Path>() {
+      @Override
+      public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) throws IOException {
+        if (pathMatcher.matches(path)) {
+          Files.delete(path);
+        }
+        return FileVisitResult.CONTINUE;
+      }
+
+      @Override
+      public FileVisitResult preVisitDirectory(Path dirPath, BasicFileAttributes attrs) throws IOException {
+        if (dirMatcher.matches(dirPath) || dirPath.equals(parentDir.toPath())) {
+          return FileVisitResult.CONTINUE;
+        }
+        return FileVisitResult.SKIP_SUBTREE;
+      }
+    });
+
   }
 
   private static void deleteRecursivelyUsingUnixNative(File file) throws IOException {

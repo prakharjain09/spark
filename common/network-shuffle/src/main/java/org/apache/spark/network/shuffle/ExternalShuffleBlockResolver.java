@@ -237,6 +237,24 @@ public class ExternalShuffleBlockResolver {
   }
 
   /**
+   * Removes all shuffle files corresponding to a given shuffleId for all
+   * the registered executors of the app.
+   */
+  public void deleteShuffleFiles(int shuffleId, String appId) {
+    logger.info("Request to delete shuffleId {} for applicationId {}", shuffleId, appId);
+    Iterator<Map.Entry<AppExecId, ExecutorShuffleInfo>> it = executors.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry<AppExecId, ExecutorShuffleInfo> entry = it.next();
+      AppExecId appExecId = entry.getKey();
+      ExecutorShuffleInfo executorShuffleInfo = entry.getValue();
+      if (appId.equals(appExecId.appId)) {
+        directoryCleaner.execute(() -> deleteShuffleFilesForExecutors(shuffleId,
+            executorShuffleInfo));
+      }
+    }
+  }
+
+  /**
    * Synchronously deletes each directory one at a time.
    * Should be executed in its own thread, as this may take a long time.
    */
@@ -270,6 +288,21 @@ public class ExternalShuffleBlockResolver {
         logger.debug("Successfully cleaned up non-shuffle files in directory: {}", localDir);
       } catch (Exception e) {
         logger.error("Failed to delete non-shuffle files in directory: " + localDir, e);
+      }
+    }
+  }
+
+  private void deleteShuffleFilesForExecutors(int shuffleId,
+                                              ExecutorShuffleInfo executorShuffleInfo) {
+    final String filePrefixToDelete = "shuffle_" + shuffleId + "_.*";
+    for (String dir : executorShuffleInfo.localDirs) {
+      try {
+        logger.debug("Cleaning files for shuffleId {} for  dir: {}", shuffleId, dir);
+        JavaUtils.deleteRecursively(new File(dir), filePrefixToDelete,
+            "[0-9a-zA-Z]([0-9a-zA-Z])+");
+      } catch (Exception e) {
+        logger.warn("Failed to cleanup shuffle files for shuffleId {} " +
+            "for dir: {}", shuffleId, dir, e);
       }
     }
   }

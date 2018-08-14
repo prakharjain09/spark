@@ -412,6 +412,12 @@ package object config {
       .intConf
       .createWithDefault(3)
 
+  private[spark] val SHUFFLE_CLEANUP_FOR_ESS_ENABLED =
+    ConfigBuilder("spark.shuffle.cleanup.enabled")
+      .doc("Whether to send shuffle cleanup message to ExternalShuffleService.")
+      .booleanConf
+      .createWithDefault(false)
+
   private[spark] val REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS =
     ConfigBuilder("spark.reducer.maxBlocksInFlightPerAddress")
       .doc("This configuration limits the number of remote blocks being fetched per reduce task " +

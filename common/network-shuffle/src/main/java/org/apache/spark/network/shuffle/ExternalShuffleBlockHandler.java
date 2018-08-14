@@ -106,7 +106,7 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
 
     } else if (msgObj instanceof RegisterExecutor) {
       final Timer.Context responseDelayContext =
-        metrics.registerExecutorRequestLatencyMillis.time();
+          metrics.registerExecutorRequestLatencyMillis.time();
       try {
         RegisterExecutor msg = (RegisterExecutor) msgObj;
         checkAuth(client, msg.appId);
@@ -115,7 +115,17 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
       } finally {
         responseDelayContext.stop();
       }
-
+    } else if (msgObj instanceof DeleteShuffle) {
+      final Timer.Context responseDelayContext =
+          metrics.deleteShuffleRequestLatencyMillis.time();
+      try {
+        DeleteShuffle msg = (DeleteShuffle) msgObj;
+        checkAuth(client, msg.appId);
+        blockManager.deleteShuffleFiles(msg.shuffleId, msg.appId);
+        callback.onSuccess(ByteBuffer.wrap(new byte[0]));
+      } finally {
+        responseDelayContext.stop();
+      }
     } else {
       throw new UnsupportedOperationException("Unexpected message: " + msgObj);
     }
@@ -179,6 +189,8 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
     private final Timer openBlockRequestLatencyMillis = new Timer();
     // Time latency for executor registration latency in ms
     private final Timer registerExecutorRequestLatencyMillis = new Timer();
+    // Time latency for executor registration latency in ms
+    private final Timer deleteShuffleRequestLatencyMillis = new Timer();
     // Block transfer rate in byte per second
     private final Meter blockTransferRateBytes = new Meter();
 
@@ -186,6 +198,7 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
       allMetrics = new HashMap<>();
       allMetrics.put("openBlockRequestLatencyMillis", openBlockRequestLatencyMillis);
       allMetrics.put("registerExecutorRequestLatencyMillis", registerExecutorRequestLatencyMillis);
+      allMetrics.put("deleteShuffleRequestLatencyMillis", deleteShuffleRequestLatencyMillis);
       allMetrics.put("blockTransferRateBytes", blockTransferRateBytes);
       allMetrics.put("registeredExecutorsSize",
                      (Gauge<Integer>) () -> blockManager.getRegisteredExecutorsSize());

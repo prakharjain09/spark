@@ -437,17 +437,21 @@ case class AlterTableAddPartitionCommand(
     val table = catalog.getTableMetadata(tableName)
     DDLUtils.verifyAlterTableType(catalog, table, isView = false)
     DDLUtils.verifyPartitionProviderIsHive(sparkSession, table, "ALTER TABLE ADD PARTITION")
-    val parts = partitionSpecsAndLocs.map { case (spec, location) =>
-      val normalizedSpec = PartitioningUtils.normalizePartitionSpec(
-        spec,
-        table.partitionColumnNames,
-        table.identifier.quotedString,
-        sparkSession.sessionState.conf.resolver)
-      // inherit table storage format (possibly except for location)
-      CatalogTablePartition(normalizedSpec, table.storage.copy(
-        locationUri = location.map(CatalogUtils.stringToURI)))
+    val parts = partitionSpecsAndLocs.toIterator.grouped(batchSize).map { batch =>
+      val currentBatchParts = batch.map { case (spec, location) =>
+        val normalizedSpec = PartitioningUtils.normalizePartitionSpec(
+          spec,
+          table.partitionColumnNames,
+          table.identifier.quotedString,
+          sparkSession.sessionState.conf.resolver)
+        // inherit table storage format (possibly except for location)
+        CatalogTablePartition(normalizedSpec, table.storage.copy(
+          locationUri = location.map(CatalogUtils.stringToURI)))
+      }
+
+      catalog.createPartitions(table.identifier, currentBatchParts, ignoreIfExists = ifNotExists)
+      currentBatchParts
     }
-    catalog.createPartitions(table.identifier, parts, ignoreIfExists = ifNotExists)
 
     if (table.stats.nonEmpty) {
       if (sparkSession.sessionState.conf.autoSizeUpdateEnabled) {

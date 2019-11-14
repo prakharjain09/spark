@@ -21,14 +21,11 @@ import java.util.{Properties, Random}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
 import org.mockito.ArgumentMatchers.{any, anyBoolean, anyInt, anyString}
 import org.mockito.Mockito._
 import org.mockito.invocation.InvocationOnMock
-
 import org.apache.spark._
-import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config
+import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.resource.ResourceUtils._
 import org.apache.spark.resource.TestResourceIDs._
 import org.apache.spark.serializer.SerializerInstance
@@ -1775,4 +1772,59 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     assert(!manager.checkSpeculatableTasks(0))
     assert(manager.resourceOffer("exec1", "host1", ANY).isEmpty)
   }
+
+  test("SPARK-21040 tasks running on decommissioning executors should " +
+    "be considered for speculation") {
+    sc = new SparkContext("local", "test")
+    sched = new FakeTaskScheduler(sc, ("exec1", "host1"), ("exec2", "host2"), ("exec3", "host3"))
+    val taskSet = FakeTask.createTaskSet(4)
+    // Setting SPECULATION_QUANTILE to 1 so that speculation will kick on already running tasks only
+    // when 100% of them are over i.e. it never kicks in
+    sc.conf.set(config.SPECULATION_QUANTILE, 1.0)
+    sc.conf.set(config.SPECULATION_ENABLED, true)
+    val clock = new ManualClock()
+    val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
+    val accumUpdatesByTask: Array[Seq[AccumulatorV2[_, _]]] = taskSet.tasks.map { task =>
+      task.metrics.internalAccums
+    }
+
+    // Offer resources for 4 tasks to start
+    for ((k, v) <- List(
+      "exec1" -> "host1",
+      "exec1" -> "host1",
+      "exec2" -> "host2",
+      "exec2" -> "host2")) {
+      val taskOption = manager.resourceOffer(k, v, NO_PREF)
+      assert(taskOption.isDefined)
+      val task = taskOption.get
+      assert(task.executorId === k)
+    }
+    assert(sched.startedTasks.toSet === Set(0, 1, 2, 3))
+    clock.advance(1)
+    // checkSpeculatableTasks checks that the number of finished tasks should be greater than
+    // SPECULATION_QUANTILE fraction for speculating. So no tasks should speculate as of now
+    assert(!manager.checkSpeculatableTasks(0))
+    assert(sched.speculativeTasks.isEmpty)
+    manager.executorDecommission("exec1")
+    assert(manager.checkSpeculatableTasks(0))
+    assert(sched.speculativeTasks.toSet == Set(0, 1))
+    assert(manager.decommissionExecsTasksSet == Set(0, 1))
+
+    for ((k, v) <- List(
+      "exec3" -> "host3",
+      "exec3" -> "host3")) {
+      val taskOption = manager.resourceOffer(k, v, NO_PREF)
+      assert(taskOption.isDefined)
+      val task = taskOption.get
+      assert(task.executorId === k)
+    }
+
+    // Now mark host1 as dead
+    sched.removeExecutor("exec1")
+    manager.executorLost("exec1", "host1", SlaveLost())
+    assert(sched.speculativeTasks.toSet == Set(0, 1))
+    assert(manager.decommissionExecsTasksSet.isEmpty)
+  }
+
+
 }

@@ -112,6 +112,7 @@ private[spark] class TaskSetManager(
   }
 
   private[scheduler] val runningTasksSet = new HashSet[Long]
+  private[scheduler] val decommissionExecsTasksSet = new HashSet[Long]
 
   override def runningTasks: Int = runningTasksSet.size
 
@@ -894,8 +895,11 @@ private[spark] class TaskSetManager(
 
   /** If the given task ID is in the set of running tasks, removes it. */
   def removeRunningTask(tid: Long): Unit = {
-    if (runningTasksSet.remove(tid) && parent != null) {
-      parent.decreaseRunningTasks(1)
+    if (runningTasksSet.remove(tid)) {
+      decommissionExecsTasksSet.remove(tid)
+      if (parent != null) {
+        parent.decreaseRunningTasks(1)
+      }
     }
   }
 
@@ -966,8 +970,15 @@ private[spark] class TaskSetManager(
     // `successfulTaskDurations` may not equal to `tasksSuccessful`. Here we should only count the
     // tasks that are submitted by this `TaskSetManager` and are completed successfully.
     val numSuccessfulTasks = successfulTaskDurations.size()
+    val time = clock.getTimeMillis()
+
+    def speculateTask(index: Int) = {
+      addPendingTask(index, speculatable = true)
+      speculatableTasks += index
+      sched.dagScheduler.speculativeTaskSubmitted(tasks(index))
+    }
+
     if (numSuccessfulTasks >= minFinishedForSpeculation) {
-      val time = clock.getTimeMillis()
       val medianDuration = successfulTaskDurations.median
       val threshold = max(speculationMultiplier * medianDuration, minTimeToSpeculation)
       // TODO: Threshold should also look at standard deviation of task durations and have a lower
@@ -978,15 +989,26 @@ private[spark] class TaskSetManager(
         val index = info.index
         if (!successful(index) && copiesRunning(index) == 1 && info.timeRunning(time) > threshold &&
             !speculatableTasks.contains(index)) {
-          addPendingTask(index, speculatable = true)
+          speculateTask(index)
           logInfo(
             ("Marking task %d in stage %s (on %s) as speculatable because it ran more" +
             " than %.0f ms(%d speculatable tasks in this taskset now)")
-            .format(index, taskSet.id, info.host, threshold, speculatableTasks.size + 1))
-          speculatableTasks += index
-          sched.dagScheduler.speculativeTaskSubmitted(tasks(index))
+            .format(index, taskSet.id, info.host, threshold, speculatableTasks.size))
           foundTasks = true
         }
+      }
+    }
+
+    decommissionExecsTasksSet.foreach { tid =>
+      val info = taskInfos(tid)
+      val index = info.index
+      if (!successful(index) && copiesRunning(index) == 1 && !speculatableTasks.contains(index)) {
+        speculateTask(index)
+        logInfo(
+          ("Marking task %d in stage %s (on exec %s) as speculatable because the executor " +
+            " is decommissioned(%d speculatable tasks in this taskset now)")
+            .format(index, taskSet.id, info.executorId, speculatableTasks.size))
+        foundTasks = true
       }
     }
     foundTasks
@@ -1037,8 +1059,10 @@ private[spark] class TaskSetManager(
 
   def executorDecommission(execId: String): Unit = {
     recomputeLocality()
-    // Future consideration: if an executor is decommissioned it may make sense to add the current
-    // tasks to the spec exec queue.
+
+    runningTasksSet
+      .filter(tid => taskInfos(tid).executorId == execId)
+      .foreach(decommissionExecsTasksSet.add)
   }
 
   def recomputeLocality(): Unit = {

@@ -20,7 +20,6 @@ package org.apache.spark
 import java.util.concurrent.TimeUnit
 
 import scala.collection.mutable
-import scala.concurrent.Future
 
 import org.mockito.ArgumentMatchers.{any, eq => meq}
 import org.mockito.Mockito.{mock, never, verify, when}
@@ -338,23 +337,18 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
 
     // Keep removing until the limit is reached
     assert(executorsPendingToRemove(manager).isEmpty)
-    removeExecutor(manager, "1")
+    assert(removeExecutor(manager, "1"))
     assert(executorsPendingToRemove(manager).size === 1)
     assert(executorsPendingToRemove(manager).contains("1"))
-    removeExecutor(manager, "2")
-    removeExecutor(manager, "3")
+    assert(removeExecutor(manager, "2"))
+    assert(removeExecutor(manager, "3"))
     assert(executorsPendingToRemove(manager).size === 3)
     assert(executorsPendingToRemove(manager).contains("2"))
     assert(executorsPendingToRemove(manager).contains("3"))
-<<<<<<< HEAD
-=======
-    removeExecutor(manager, "100") // remove non-existent executors
-    removeExecutor(manager, "101")
->>>>>>> 03ed8a2f59... [SPARK-21097][CORE]Add option to recover cached data during dynamic allocation
     assert(executorsPendingToRemove(manager).size === 3)
-    removeExecutor(manager, "4")
-    removeExecutor(manager, "5")
-    removeExecutor(manager, "6") // reached the limit of 5
+    assert(removeExecutor(manager, "4"))
+    assert(removeExecutor(manager, "5"))
+    assert(!removeExecutor(manager, "6")) // reached the limit of 5
     assert(executorsPendingToRemove(manager).size === 5)
     assert(executorsPendingToRemove(manager).contains("4"))
     assert(executorsPendingToRemove(manager).contains("5"))
@@ -378,9 +372,9 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
 
     // Try removing again
     // This should still fail because the number pending + running is still at the limit
-    removeExecutor(manager, "7")
+    assert(!removeExecutor(manager, "7"))
     assert(executorsPendingToRemove(manager).isEmpty)
-    removeExecutor(manager, "8")
+    assert(!removeExecutor(manager, "8"))
     assert(executorsPendingToRemove(manager).isEmpty)
   }
 
@@ -390,22 +384,17 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
 
     // Keep removing until the limit is reached
     assert(executorsPendingToRemove(manager).isEmpty)
-    removeExecutors(manager, Seq("1"))
+    assert(removeExecutors(manager, Seq("1")) === Seq("1"))
     assert(executorsPendingToRemove(manager).size === 1)
     assert(executorsPendingToRemove(manager).contains("1"))
-    removeExecutors(manager, Seq("2", "3"))
+    assert(removeExecutors(manager, Seq("2", "3")) === Seq("2", "3"))
     assert(executorsPendingToRemove(manager).size === 3)
     assert(executorsPendingToRemove(manager).contains("2"))
     assert(executorsPendingToRemove(manager).contains("3"))
-<<<<<<< HEAD
-=======
-    removeExecutor(manager, "100") // remove non-existent executors
-    removeExecutors(manager, Seq("101", "102"))
->>>>>>> 03ed8a2f59... [SPARK-21097][CORE]Add option to recover cached data during dynamic allocation
     assert(executorsPendingToRemove(manager).size === 3)
-    removeExecutor(manager, "4")
-    removeExecutors(manager, Seq("5"))
-    removeExecutor(manager, "6") // reached the limit of 5
+    assert(removeExecutor(manager, "4"))
+    assert(removeExecutors(manager, Seq("5")) === Seq("5"))
+    assert(!removeExecutor(manager, "6")) // reached the limit of 5
     assert(executorsPendingToRemove(manager).size === 5)
     assert(executorsPendingToRemove(manager).contains("4"))
     assert(executorsPendingToRemove(manager).contains("5"))
@@ -429,9 +418,9 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
 
     // Try removing again
     // This should still fail because the number pending + running is still at the limit
-    removeExecutor(manager, "7")
+    assert(!removeExecutor(manager, "7"))
     assert(executorsPendingToRemove(manager).isEmpty)
-    removeExecutors(manager, Seq("8"))
+    assert(removeExecutors(manager, Seq("8")) !== Seq("8"))
     assert(executorsPendingToRemove(manager).isEmpty)
   }
 
@@ -449,8 +438,7 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 8)
     assert(numExecutorsTarget(manager) === 8)
     assert(maxNumExecutorsNeeded(manager) == 8)
-    removeExecutor(manager, "1") // won't work since numExecutorsTarget == numExecutors
-    assert(!executorsPendingToRemove(manager).contains("1"))
+    assert(!removeExecutor(manager, "1")) // won't work since numExecutorsTarget == numExecutors
 
     // Remove executors when numExecutorsTarget is lower than current number of executors
     (1 to 3).map { i => createTaskInfo(i, i, s"$i") }.foreach { info =>
@@ -460,11 +448,8 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 8)
     assert(numExecutorsTarget(manager) === 5)
     assert(maxNumExecutorsNeeded(manager) == 5)
-    removeExecutor(manager, "1")
-    assert(executorsPendingToRemove(manager).contains("1"))
-    removeExecutors(manager, Seq("2", "3"))
-    assert(executorsPendingToRemove(manager).contains("2"))
-    assert(executorsPendingToRemove(manager).contains("3"))
+    assert(removeExecutor(manager, "1"))
+    assert(removeExecutors(manager, Seq("2", "3"))=== Seq("2", "3"))
     onExecutorRemoved(manager, "1")
     onExecutorRemoved(manager, "2")
     onExecutorRemoved(manager, "3")
@@ -475,8 +460,7 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 5)
     assert(numExecutorsTarget(manager) === 5)
     assert(maxNumExecutorsNeeded(manager) == 4)
-    removeExecutor(manager, "4") // lower limit
-    assert(!executorsPendingToRemove(manager).contains("4"))
+    assert(!removeExecutor(manager, "4")) // lower limit
     assert(addExecutors(manager) === 0) // upper limit
   }
 
@@ -498,12 +482,10 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 8)
     assert(numExecutorsTarget(manager) === 8)
 
+
     // Remove when numTargetExecutors is equal to the current number of executors
-    removeExecutor(manager, "1")
-    assert(!executorsPendingToRemove(manager).contains("1"))
-    removeExecutors(manager, Seq("2", "3"))
-    assert(!executorsPendingToRemove(manager).contains("2"))
-    assert(!executorsPendingToRemove(manager).contains("3"))
+    assert(!removeExecutor(manager, "1"))
+    assert(removeExecutors(manager, Seq("2", "3")) !== Seq("2", "3"))
 
     // Remove until limit
     onExecutorAdded(manager, "9")
@@ -513,17 +495,10 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 12)
     assert(numExecutorsTarget(manager) === 8)
 
-    removeExecutor(manager, "1")
-    assert(executorsPendingToRemove(manager).contains("1"))
-    removeExecutors(manager, Seq("2", "3", "4"))
-    assert(executorsPendingToRemove(manager).contains("2"))
-    assert(executorsPendingToRemove(manager).contains("3"))
-    assert(executorsPendingToRemove(manager).contains("4"))
-    removeExecutor(manager, "5") // lower limit reached
-    assert(!executorsPendingToRemove(manager).contains("5"))
-    removeExecutor(manager, "6")
-    assert(!executorsPendingToRemove(manager).contains("6"))
-    removeExecutor(manager, "5") // lower limit reached
+    assert(removeExecutor(manager, "1"))
+    assert(removeExecutors(manager, Seq("2", "3", "4")) === Seq("2", "3", "4"))
+    assert(!removeExecutor(manager, "5")) // lower limit reached
+    assert(!removeExecutor(manager, "6"))
     onExecutorRemoved(manager, "1")
     onExecutorRemoved(manager, "2")
     onExecutorRemoved(manager, "3")
@@ -531,8 +506,7 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 8)
 
     // Add until limit
-    removeExecutor(manager, "7") // still at lower limit
-    assert(!executorsPendingToRemove(manager).contains("7"))
+    assert(!removeExecutor(manager, "7")) // still at lower limit
     assert((manager, Seq("8")) !== Seq("8"))
     onExecutorAdded(manager, "13")
     onExecutorAdded(manager, "14")
@@ -541,19 +515,9 @@ class ExecutorAllocationManagerSuite extends SparkFunSuite {
     assert(manager.executorMonitor.executorCount === 12)
 
     // Remove succeeds again, now that we are no longer at the lower limit
-<<<<<<< HEAD
     assert(removeExecutors(manager, Seq("5", "6", "7")) === Seq("5", "6", "7"))
     assert(removeExecutor(manager, "8"))
     assert(manager.executorMonitor.executorCount === 12)
-=======
-    removeExecutors(manager, Seq("5", "6", "7"))
-    assert(executorsPendingToRemove(manager).contains("5"))
-    assert(executorsPendingToRemove(manager).contains("6"))
-    assert(executorsPendingToRemove(manager).contains("7"))
-    removeExecutor(manager, "8")
-    assert(executorsPendingToRemove(manager).contains("8"))
-    assert(executorIds(manager).size === 12)
->>>>>>> 03ed8a2f59... [SPARK-21097][CORE]Add option to recover cached data during dynamic allocation
     onExecutorRemoved(manager, "5")
     onExecutorRemoved(manager, "6")
     assert(manager.executorMonitor.executorCount === 10)
@@ -1161,15 +1125,7 @@ private object ExecutorAllocationManagerSuite extends PrivateMethodTester {
     manager invokePrivate _updateAndSyncNumExecutorsTarget(0L)
   }
 
-<<<<<<< HEAD
   private def removeExecutors(manager: ExecutorAllocationManager, ids: Seq[String]): Seq[String] = {
-=======
-  private def removeExecutor(manager: ExecutorAllocationManager, id: String): Unit = {
-    manager invokePrivate _removeExecutors(Seq(id))
-  }
-
-  private def removeExecutors(manager: ExecutorAllocationManager, ids: Seq[String]): Unit = {
->>>>>>> 03ed8a2f59... [SPARK-21097][CORE]Add option to recover cached data during dynamic allocation
     manager invokePrivate _removeExecutors(ids)
   }
 
@@ -1197,69 +1153,3 @@ private object ExecutorAllocationManagerSuite extends PrivateMethodTester {
     manager invokePrivate _hostToLocalTaskCount()
   }
 }
-<<<<<<< HEAD
-=======
-
-/**
- * A cluster manager which wraps around the scheduler and backend for local mode. It is used for
- * testing the dynamic allocation policy.
- */
-private class DummyLocalExternalClusterManager extends ExternalClusterManager {
-
-  def canCreate(masterURL: String): Boolean = masterURL == "myDummyLocalExternalClusterManager"
-
-  override def createTaskScheduler(
-      sc: SparkContext,
-      masterURL: String): TaskScheduler = new TaskSchedulerImpl(sc, 1, isLocal = true)
-
-  override def createSchedulerBackend(
-      sc: SparkContext,
-      masterURL: String,
-      scheduler: TaskScheduler): SchedulerBackend = {
-    val sb = new LocalSchedulerBackend(sc.getConf, scheduler.asInstanceOf[TaskSchedulerImpl], 1)
-    new DummyLocalSchedulerBackend(sc, sb)
-  }
-
-  override def initialize(scheduler: TaskScheduler, backend: SchedulerBackend): Unit = {
-    val sc = scheduler.asInstanceOf[TaskSchedulerImpl]
-    sc.initialize(backend)
-  }
-}
-
-/**
- * A scheduler backend which wraps around local scheduler backend and exposes the executor
- * allocation client interface for testing dynamic allocation.
- */
-private class DummyLocalSchedulerBackend (sc: SparkContext, sb: SchedulerBackend)
-  extends SchedulerBackend with ExecutorAllocationClient {
-
-  override private[spark] def getExecutorIds(): Seq[String] = Nil
-
-  override private[spark] def requestTotalExecutors(
-      numExecutors: Int,
-      localityAwareTasks: Int,
-      hostToLocalTaskCount: Map[String, Int]): Boolean = true
-
-  override def requestExecutors(numAdditionalExecutors: Int): Boolean = true
-
-  override def killExecutors(
-      executorIds: Seq[String],
-      adjustTargetNumExecutors: Boolean,
-      countFailures: Boolean,
-      force: Boolean): Seq[String] = executorIds
-
-  override def start(): Unit = sb.start()
-
-  override def stop(): Unit = sb.stop()
-
-  override def reviveOffers(): Unit = sb.reviveOffers()
-
-  override def defaultParallelism(): Int = sb.defaultParallelism()
-
-  override def killExecutorsOnHost(host: String): Boolean = {
-    false
-  }
-
-  override def markPendingToRemove(executorIds: Seq[String]): Unit = Seq.empty
-}
->>>>>>> 03ed8a2f59... [SPARK-21097][CORE]Add option to recover cached data during dynamic allocation

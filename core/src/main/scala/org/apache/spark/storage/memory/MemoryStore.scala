@@ -71,7 +71,8 @@ private[storage] trait BlockEvictionHandler {
    */
   private[storage] def dropFromMemory[T: ClassTag](
       blockId: BlockId,
-      data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel
+      data: () => Either[Array[T], ChunkedByteBuffer],
+      forceTransferOnDisk: Boolean = false): StorageLevel
 }
 
 /**
@@ -418,6 +419,47 @@ private[spark] class MemoryStore(
    */
   private def getRddId(blockId: BlockId): Option[Int] = {
     blockId.asRDDId.map(_.rddId)
+  }
+
+  private[spark] def moveBlockToDisk(blockId: BlockId): Unit = {
+    if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+      var unlocked = false
+
+      def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
+        val data = entry match {
+          case DeserializedMemoryEntry(values, _, _) => Left(values)
+          case SerializedMemoryEntry(buffer, _, _) => Right(buffer)
+        }
+        val newEffectiveStorageLevel =
+          blockEvictionHandler.dropFromMemory(blockId, () => data, true)(entry.classTag)
+        if (newEffectiveStorageLevel.isValid) {
+          // The block is still present in at least one store, so release the lock
+          // but don't delete the block info
+          blockInfoManager.unlock(blockId)
+          unlocked = true
+        } else {
+          // The block isn't present in any store, so delete the block info so that the
+          // block can be stored again
+          blockInfoManager.removeBlock(blockId)
+        }
+      }
+
+      try {
+        logInfo(s"${blockId} block selected for dropping")
+        val entry = entries.synchronized {
+          entries.get(blockId)
+        }
+        if (entry != null) {
+          dropBlock(blockId, entry)
+        }
+      } finally {
+        if (!unlocked) {
+          blockInfoManager.unlock(blockId)
+        }
+      }
+    } else {
+      logInfo(s"Unable to take lock for ${blockId}")
+    }
   }
 
   /**

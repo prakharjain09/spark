@@ -27,7 +27,7 @@ import org.apache.spark.{SparkConf, SparkContext, SparkException, SparkFunSuite,
 import org.apache.spark.internal.config._
 import org.apache.spark.network.TransportContext
 import org.apache.spark.network.netty.SparkTransportConf
-import org.apache.spark.network.shuffle.ExternalShuffleBlockHandler
+import org.apache.spark.network.shuffle.ExternalBlockHandler
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage._
 
@@ -43,7 +43,7 @@ class CacheRecoveryIntegrationSuite extends SparkFunSuite
 
   private var conf: SparkConf = makeBaseConf()
   private val transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle", numUsableCores = 4)
-  private val rpcHandler = new ExternalShuffleBlockHandler(transportConf, null)
+  private val rpcHandler = new ExternalBlockHandler(transportConf, null)
   private val transportContext = new TransportContext(transportConf, rpcHandler)
   private val shuffleService = transportContext.createServer()
   private var sc: SparkContext = _

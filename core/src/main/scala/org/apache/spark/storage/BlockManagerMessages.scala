@@ -32,6 +32,8 @@ private[spark] object BlockManagerMessages {
   // blocks that the master knows about.
   case class RemoveBlock(blockId: BlockId) extends ToBlockManagerSlave
 
+  case class TransferBlocksToDisk() extends ToBlockManagerSlave
+
   case class ReplicateBlock(
       blockId: BlockId,
       replicas: Seq[BlockManagerId],
@@ -140,4 +142,6 @@ private[spark] object BlockManagerMessages {
 
   case class RecoverLatestRDDBlock(executorId: String, excludingExecs: Seq[String])
     extends ToBlockManagerMaster
+
+  case class TransferBlocksToDiskForExecutor(execId: String) extends ToBlockManagerMaster
 }

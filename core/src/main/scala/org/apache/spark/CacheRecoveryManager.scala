@@ -177,7 +177,7 @@ private class CacheRecoveryManager(
    * @param execId the id of the executor to be killed
    */
   private def kill(execId: String): Unit = {
-    executorAllocationManager.killExecutors(Seq(execId))
+    // executorAllocationManager.killExecutors(Seq(execId))
   }
 
   /**

@@ -407,6 +407,12 @@ package object config {
       .checkValue(_ >= 0L, "Timeout must be >= 0.")
       .createWithDefault(Integer.MAX_VALUE)
 
+  private[spark] val DYN_ALLOCATION_CACHE_MEM_TO_DISK_TIMEOUT =
+    ConfigBuilder("spark.dynamicAllocation.cacheMemToDiskTimeout")
+      .timeConf(TimeUnit.SECONDS)
+      .checkValue(_ >= 0L, "Timeout must be >= 0.")
+      .createWithDefault(Integer.MAX_VALUE)
+
   private[spark] val DYN_ALLOCATION_EXECUTOR_IDLE_TIMEOUT =
     ConfigBuilder("spark.dynamicAllocation.executorIdleTimeout")
       .timeConf(TimeUnit.SECONDS)

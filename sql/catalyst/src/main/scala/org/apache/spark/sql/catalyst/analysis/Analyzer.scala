@@ -301,6 +301,18 @@ class Analyzer(
 
       case Project(projectList, child) if child.resolved && hasUnresolvedAlias(projectList) =>
         Project(assignAliases(projectList), child)
+
+//      case inlineTable @ UnresolvedInlineTable(names, rows) if !inlineTable.expressionsResolved
+//        && rows.exists(_.exists(expr => expr.isInstanceOf[NamedExpression] && !expr.resolved)) =>
+//
+//        val newRows = rows.map { row =>
+//          val newRow = row.map {
+//            case e: NamedExpression => assignAliases(Seq(e)).head
+//            case e => e
+//          }
+//          newRow
+//        }
+//        UnresolvedInlineTable(names, newRows)
     }
   }
 
@@ -1742,6 +1754,10 @@ class Analyzer(
      *     outer plan to get evaluated.
      */
     private def resolveSubQueries(plan: LogicalPlan, plans: Seq[LogicalPlan]): LogicalPlan = {
+      logInfo(s"plan: $plan")
+      plan.expressions.foreach { expr =>
+        logInfo(s"expr: ${expr.getClass.getName} $expr")
+      }
       plan transformExpressions {
         case s @ ScalarSubquery(sub, _, exprId) if !sub.resolved =>
           resolveSubQuery(s, plans)(ScalarSubquery(_, _, exprId))
@@ -1759,18 +1775,23 @@ class Analyzer(
     /**
      * Resolve and rewrite all subqueries in an operator tree..
      */
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      // In case of HAVING (a filter after an aggregate) we use both the aggregate and
-      // its child for resolution.
-      case f @ Filter(_, a: Aggregate) if f.childrenResolved =>
-        resolveSubQueries(f, Seq(a, a.child))
-      // Only a few unary nodes (Project/Filter/Aggregate) can contain subqueries.
-      case q: UnaryNode if q.childrenResolved =>
-        resolveSubQueries(q, q.children)
-      case j: Join if j.childrenResolved =>
-        resolveSubQueries(j, Seq(j, j.left, j.right))
-      case s: SupportsSubquery if s.childrenResolved =>
-        resolveSubQueries(s, s.children)
+    def apply(plan: LogicalPlan): LogicalPlan = {
+      logInfo(s"In Resolve Subquery")
+      plan.resolveOperatorsUp {
+        // In case of HAVING (a filter after an aggregate) we use both the aggregate and
+        // its child for resolution.
+        case f @ Filter(_, a: Aggregate) if f.childrenResolved =>
+          resolveSubQueries(f, Seq(a, a.child))
+        case i: UnresolvedInlineTable =>
+          resolveSubQueries(i, i.children)
+        // Only a few unary nodes (Project/Filter/Aggregate) can contain subqueries.
+        case q: UnaryNode if q.childrenResolved =>
+          resolveSubQueries(q, q.children)
+        case j: Join if j.childrenResolved =>
+          resolveSubQueries(j, Seq(j, j.left, j.right))
+        case s: SupportsSubquery if s.childrenResolved =>
+          resolveSubQueries(s, s.children)
+      }
     }
   }
 

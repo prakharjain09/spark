@@ -1640,12 +1640,19 @@ private[spark] class BlockManager(
    */
   private[storage] override def dropFromMemory[T: ClassTag](
       blockId: BlockId,
-      data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel = {
+      data: () => Either[Array[T], ChunkedByteBuffer],
+      forceTransferOnDisk: Boolean = false): StorageLevel = {
     logInfo(s"Dropping block $blockId from memory")
     val info = blockInfoManager.assertBlockIsLockedForWriting(blockId)
     var blockIsUpdated = false
-    val level = info.level
 
+    if (forceTransferOnDisk) {
+      val oldLevel = info.level
+      info.level = StorageLevel(true, oldLevel.useMemory, oldLevel.useOffHeap,
+        oldLevel.deserialized, oldLevel.replication)
+    }
+
+    val level = info.level
     // Drop to disk, if storage level requires
     if (level.useDisk && !diskStore.contains(blockId)) {
       logInfo(s"Writing block $blockId to disk")
@@ -1683,6 +1690,18 @@ private[spark] class BlockManager(
     }
     status.storageLevel
   }
+
+  def moveBlocksToDisk(): Unit = {
+    val allRddBlockEntries = blockInfoManager.entries.filter(_._1.isRDD)
+    val allRddBlockEntriesInMemoryStore =
+      allRddBlockEntries.filter(x => memoryStore.contains(x._1)).toSeq.toList
+    // logInfo(s">>>>>>>>>>>>>>>>>>>>>> Blocks to move to disk ${allRddBlockEntriesInMemoryStore.mkString(",")}")
+    allRddBlockEntriesInMemoryStore.foreach { case (blockId, _) =>
+      logInfo(s">>>>>>>>>>>>>>>>>>>> Moving $blockId block to disk")
+      memoryStore.moveBlockToDisk(blockId)
+    }
+  }
+
 
   /**
    * Remove all blocks belonging to the given RDD.

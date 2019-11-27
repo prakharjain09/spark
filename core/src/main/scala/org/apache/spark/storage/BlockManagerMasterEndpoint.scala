@@ -142,9 +142,24 @@ class BlockManagerMasterEndpoint(
     case RecoverLatestRDDBlock(execId, excluded) =>
       recoverLatestRDDBlock(execId, excluded, context)
 
+    case TransferBlocksToDiskForExecutor(execId) =>
+      transferBlocksToDisk(execId)
+      context.reply(true)
+
     case StopBlockManagerMaster =>
       context.reply(true)
       stop()
+  }
+
+  private def transferBlocksToDisk(execId: String): Unit = {
+    logInfo(s">>>>>>>>>>>>>>> DRIVER BM Got request for TransferBlocksToDisk for execId $execId")
+    blockManagerIdByExecutor.get(execId).foreach { case bmId =>
+      blockManagerInfo.get(bmId).foreach { info =>
+        logInfo(s">>>>>>>>>>>>>>> Sending TransferBlocksToDisk for execId $execId")
+        info.slaveEndpoint.ask[Boolean](TransferBlocksToDisk())
+      }
+    }
+    logInfo(s">>>>>>>>>>>>>>> DRIVER BM request for TransferBlocksToDisk for execId $execId done")
   }
 
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {

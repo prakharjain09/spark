@@ -66,7 +66,8 @@ class MemoryStoreSuite
     val blockEvictionHandler = new BlockEvictionHandler {
       override private[storage] def dropFromMemory[T: ClassTag](
           blockId: BlockId,
-          data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel = {
+          data: () => Either[Array[T], ChunkedByteBuffer],
+          forceTransferOnDisk: Boolean = false): StorageLevel = {
         memoryStore.remove(blockId)
         StorageLevel.NONE
       }
@@ -425,7 +426,8 @@ class MemoryStoreSuite
 
         override private[storage] def dropFromMemory[T: ClassTag](
             blockId: BlockId,
-            data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel = {
+            data: () => Either[Array[T], ChunkedByteBuffer],
+            forceTransferOnDisk: Boolean = false): StorageLevel = {
           if (droppedSoFar < numValidBlocks) {
             droppedSoFar += 1
             memoryStore.remove(blockId)

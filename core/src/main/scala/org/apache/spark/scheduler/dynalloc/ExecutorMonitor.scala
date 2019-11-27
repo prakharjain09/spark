@@ -22,11 +22,11 @@ import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.scheduler._
+import org.apache.spark.storage.BlockManagerMessages.TransferBlocksToDiskForExecutor
 import org.apache.spark.storage.RDDBlockId
 import org.apache.spark.util.Clock
 
@@ -43,6 +43,8 @@ private[spark] class ExecutorMonitor(
     conf.get(DYN_ALLOCATION_EXECUTOR_IDLE_TIMEOUT))
   private val storageTimeoutNs = TimeUnit.SECONDS.toNanos(
     conf.get(DYN_ALLOCATION_CACHED_EXECUTOR_IDLE_TIMEOUT))
+  private val cacheMemToDiskTransferTimeoutNs = TimeUnit.SECONDS.toNanos(
+    conf.get(DYN_ALLOCATION_CACHE_MEM_TO_DISK_TIMEOUT))
   private val shuffleTimeoutNs = TimeUnit.MILLISECONDS.toNanos(
     conf.get(DYN_ALLOCATION_SHUFFLE_TIMEOUT))
 
@@ -112,10 +114,18 @@ private[spark] class ExecutorMonitor(
       var newNextTimeout = Long.MaxValue
       timedOutExecs = executors.asScala
         .filter { case (_, exec) => !exec.pendingRemoval && !exec.hasActiveShuffle }
-        .filter { case (_, exec) =>
+        .filter { case (id, exec) =>
           val deadline = exec.timeoutAt
+          val cacheMemToDiskTransferDeadline = exec.cacheMemToDiskTransferDeadline
           if (deadline > now) {
-            newNextTimeout = math.min(newNextTimeout, deadline)
+            if (cacheMemToDiskTransferDeadline > now) {
+              newNextTimeout = math.min(newNextTimeout,
+                math.min(cacheMemToDiskTransferDeadline, deadline))
+            } else {
+              SparkEnv.get.blockManager
+                .master.driverEndpoint.ask[Boolean](TransferBlocksToDiskForExecutor(id))
+              newNextTimeout = math.min(newNextTimeout, deadline)
+            }
             exec.timedOut = false
             false
           } else {
@@ -328,6 +338,7 @@ private[spark] class ExecutorMonitor(
       }
     } else {
       exec.cachedBlocks.get(blockId.rddId).foreach { blocks =>
+        logInfo(s"<<<<<<<<<<<<<<<<<< BlockId ${blockId.splitIndex} removed for ${blockId.rddId} for executor ${event.blockUpdatedInfo.blockManagerId.executorId}")
         blocks -= blockId.splitIndex
         if (blocks.isEmpty) {
           exec.cachedBlocks -= blockId.rddId
@@ -415,6 +426,7 @@ private[spark] class ExecutorMonitor(
 
   private class Tracker {
     @volatile var timeoutAt: Long = Long.MaxValue
+    @volatile var cacheMemToDiskTransferDeadline: Long = Long.MaxValue
 
     // Tracks whether this executor is thought to be timed out. It's used to detect when the list
     // of timed out executors needs to be updated due to the executor's state changing.
@@ -444,7 +456,7 @@ private[spark] class ExecutorMonitor(
 
     def updateTimeout(): Unit = {
       val oldDeadline = timeoutAt
-      val newDeadline = if (idleStart >= 0) {
+      val (newDeadline, newCacheMemToDiskTransferDeadline) = if (idleStart >= 0) {
         val timeout = if (cachedBlocks.nonEmpty || (shuffleIds != null && shuffleIds.nonEmpty)) {
           val _cacheTimeout = if (cachedBlocks.nonEmpty) storageTimeoutNs else Long.MaxValue
           val _shuffleTimeout = if (shuffleIds != null && shuffleIds.nonEmpty) {
@@ -456,20 +468,31 @@ private[spark] class ExecutorMonitor(
         } else {
           idleTimeoutNs
         }
+        val cacheMemToDiskTransferDeadline = if (timeout >= storageTimeoutNs &&
+          cacheMemToDiskTransferTimeoutNs < storageTimeoutNs) {
+          idleStart + cacheMemToDiskTransferTimeoutNs
+        } else {
+          Long.MaxValue
+        }
         val deadline = idleStart + timeout
-        if (deadline >= 0) deadline else Long.MaxValue
+        if (deadline >= 0) {
+          (deadline, cacheMemToDiskTransferDeadline)
+        } else {
+          (Long.MaxValue, Long.MaxValue)
+        }
       } else {
-        Long.MaxValue
+        (Long.MaxValue, Long.MaxValue)
       }
 
       timeoutAt = newDeadline
+      cacheMemToDiskTransferDeadline = newCacheMemToDiskTransferDeadline
 
       // If the executor was thought to be timed out, but the new deadline is later than the
       // old one, ask the EAM thread to update the list of timed out executors.
       if (newDeadline > oldDeadline && timedOut) {
         nextTimeout.set(Long.MinValue)
       } else {
-        updateNextTimeout(newDeadline)
+        updateNextTimeout(math.min(cacheMemToDiskTransferDeadline, newDeadline))
       }
     }
 

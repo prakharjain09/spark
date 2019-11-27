@@ -35,7 +35,7 @@ import org.apache.spark.internal.Logging
  * Instances of this class are _not_ thread-safe and are protected by locks in the
  * [[BlockInfoManager]].
  *
- * @param level the block's storage level. This is the requested persistence level, not the
+ * @param _level the block's storage level. This is the requested persistence level, not the
  *              effective storage level of the block (i.e. if this is MEMORY_AND_DISK, then this
  *              does not imply that the block is actually resident in memory).
  * @param classTag the block's [[ClassTag]], used to select the serializer
@@ -43,9 +43,14 @@ import org.apache.spark.internal.Logging
  *                   is true for most blocks, but is false for broadcast blocks.
  */
 private[storage] class BlockInfo(
-    val level: StorageLevel,
+    private var _level: StorageLevel,
     val classTag: ClassTag[_],
     val tellMaster: Boolean) {
+
+  def level: StorageLevel = _level
+  def level_=(l: StorageLevel): Unit = {
+    _level = l
+  }
 
   /**
    * The size of the block (in bytes)

@@ -53,6 +53,12 @@ class BlockManagerSlaveEndpoint(
         blockManager.removeRdd(rddId)
       }
 
+    case TransferBlocksToDisk() =>
+      doAsync[Boolean]("TransferBlocksToDisk ", context) {
+        blockManager.moveBlocksToDisk()
+        true
+      }
+
     case RemoveShuffle(shuffleId) =>
       doAsync[Boolean]("removing shuffle " + shuffleId, context) {
         if (mapOutputTracker != null) {

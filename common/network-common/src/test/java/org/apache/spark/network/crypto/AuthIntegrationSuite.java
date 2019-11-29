@@ -233,9 +233,6 @@ public class AuthIntegrationSuite {
       if (server != null) {
         server.close();
       }
-      if (ctx != null) {
-        ctx.close();
-      }
     }
 
     private SecretKeyHolder createKeyHolder(String secret) {

@@ -70,7 +70,6 @@ public class ExternalShuffleIntegrationSuite {
   static ExternalShuffleBlockHandler handler;
   static TransportServer server;
   static TransportConf conf;
-  static TransportContext transportContext;
 
   static byte[] exec0RddBlockValid = new byte[123];
   static byte[] exec0RddBlockToRemove = new byte[124];
@@ -128,7 +127,7 @@ public class ExternalShuffleIntegrationSuite {
           return res;
         }
       });
-    transportContext = new TransportContext(conf, handler);
+    TransportContext transportContext = new TransportContext(conf, handler);
     server = transportContext.createServer();
   }
 
@@ -136,7 +135,6 @@ public class ExternalShuffleIntegrationSuite {
   public static void afterAll() {
     dataContext0.cleanup();
     server.close();
-    transportContext.close();
   }
 
   @After

@@ -51,7 +51,6 @@ public class StreamSuite {
   private static final String[] STREAMS = StreamTestHelper.STREAMS;
   private static StreamTestHelper testData;
 
-  private static TransportContext context;
   private static TransportServer server;
   private static TransportClientFactory clientFactory;
 
@@ -94,7 +93,7 @@ public class StreamSuite {
         return streamManager;
       }
     };
-    context = new TransportContext(conf, handler);
+    TransportContext context = new TransportContext(conf, handler);
     server = context.createServer();
     clientFactory = context.createClientFactory();
   }
@@ -104,7 +103,6 @@ public class StreamSuite {
     server.close();
     clientFactory.close();
     testData.cleanup();
-    context.close();
   }
 
   @Test

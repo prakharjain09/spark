@@ -1563,13 +1563,48 @@ object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
  * 1. This rule is only applicable to INTERSECT DISTINCT. Do not use it for INTERSECT ALL.
  * 2. This rule has to be done after de-duplicating the attributes; otherwise, the generated
  *    join conditions will be incorrect.
+ * 3. This rule also handles recursive intersects. Example for query:
+ *         (SELECT a1 from Tab1 INTERSECT select a2 from Tab2) INTERSECT (select a3 from Tab3)
+ *         Instead of
+ *           ==> SELECT DISTINCT a1 FROM
+ *                 (SELECT DISTINCT a1 from Tab1 LEFT SEMI JOIN Tab2 ON a1<=>a2)
+ *                   LEFT SEMI JOIN
+ *                 Tab3 ON a1<=>a3
+ *         this rule will generate
+ *           ==> SELECT a1 FROM
+ *                 (SELECT DISTINCT a1 from Tab1 LEFT SEMI JOIN Tab2 ON a1<=>a2)
+ *                   LEFT SEMI JOIN
+ *                 Tab3 ON a1<=>a3
  */
 object ReplaceIntersectWithSemiJoin extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case Intersect(left, right, false) =>
-      assert(left.output.size == right.output.size)
-      val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
-      Distinct(Join(left, right, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))
+
+  def apply(plan: LogicalPlan): LogicalPlan = plan transformDown {
+    case i @ Intersect(_, _, false) =>
+      transformIntersects(i)
+  }
+
+  private def transformIntersects(plan: LogicalPlan): LogicalPlan = {
+    plan match {
+      case i@Intersect(left, right, false) =>
+        assert(left.output.size == right.output.size)
+        val leftPlan = transformIntersects(left)
+        val rightPlan = transformIntersects(right)
+        val joinCond = left.output.zip(right.output)
+          .map { case (l, r) => EqualNullSafe(l, r) }
+          .reduceLeftOption(And)
+
+        left match {
+          case Intersect(_, _, false) =>
+            // When the child node is intersect, it will take care of adding Distinct node
+            // So we can skip adding Distinct on the current node
+            Join(leftPlan, rightPlan, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE)
+          case _ =>
+            Distinct(
+              Join(leftPlan, rightPlan, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))
+        }
+      case _ =>
+        plan
+    }
   }
 }
 

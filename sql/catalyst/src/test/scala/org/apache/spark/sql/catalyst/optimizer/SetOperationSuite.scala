@@ -20,8 +20,8 @@ package org.apache.spark.sql.catalyst.optimizer
 import org.apache.spark.sql.catalyst.analysis.EliminateSubqueryAliases
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.dsl.plans._
-import org.apache.spark.sql.catalyst.expressions.{And, GreaterThan, GreaterThanOrEqual, If, Literal, Rand, ReplicateRows}
-import org.apache.spark.sql.catalyst.plans.PlanTest
+import org.apache.spark.sql.catalyst.expressions.{And, EqualNullSafe, GreaterThan, GreaterThanOrEqual, If, Literal, Rand, ReplicateRows}
+import org.apache.spark.sql.catalyst.plans.{LeftSemi, PlanTest}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules._
 import org.apache.spark.sql.types.BooleanType
@@ -166,6 +166,38 @@ class SetOperationSuite extends PlanTest {
         planFragment
       ))
     comparePlans(expectedPlan, rewrittenPlan)
+  }
+
+  test("Handle recursive INTERSECT DISTINCT") {
+    val input = Intersect(
+      Intersect(testRelation, testRelation2, isAll = false),
+      testRelation3,
+      isAll = false
+    )
+    object OptimizeIntersect extends RuleExecutor[LogicalPlan] {
+      val batches =
+        Batch("interset distinct", Once,
+          ReplaceIntersectWithSemiJoin) :: Nil
+    }
+
+    val joinCondOuter = input.left.output.zip(input.right.output)
+      .map { case (l, r) => EqualNullSafe(l, r) }.reduceLeftOption(And)
+    val joinCondInner = testRelation.output.zip(testRelation2.output)
+      .map { case (l, r) => EqualNullSafe(l, r) }.reduceLeftOption(And)
+    val expectedPlan =
+      Join(
+        Distinct(
+          Join(testRelation, testRelation2, LeftSemi, joinCondInner, JoinHint.NONE)
+        ),
+        testRelation3,
+        LeftSemi,
+        joinCondOuter,
+        JoinHint.NONE
+      )
+
+    val rewrittenPlan = OptimizeIntersect.execute(input)
+    comparePlans(expectedPlan, rewrittenPlan)
+    assert(rewrittenPlan.collect {case a @ Aggregate(_, _, _) => a}.isEmpty)
   }
 
   test("INTERSECT ALL rewrite") {

@@ -18,7 +18,7 @@
 package org.apache.spark.storage
 
 import java.io._
-import java.lang.ref.{ReferenceQueue => JReferenceQueue, WeakReference}
+import java.lang.ref.{WeakReference, ReferenceQueue => JReferenceQueue}
 import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.util.Collections
@@ -31,11 +31,9 @@ import scala.concurrent.duration._
 import scala.reflect.ClassTag
 import scala.util.{Failure, Random, Success, Try}
 import scala.util.control.NonFatal
-
 import com.codahale.metrics.{MetricRegistry, MetricSet}
 import com.google.common.cache.CacheBuilder
 import org.apache.commons.io.IOUtils
-
 import org.apache.spark._
 import org.apache.spark.executor.DataReadMethod
 import org.apache.spark.internal.Logging
@@ -54,6 +52,7 @@ import org.apache.spark.rpc.RpcEnv
 import org.apache.spark.scheduler.ExecutorCacheTaskLocation
 import org.apache.spark.serializer.{SerializerInstance, SerializerManager}
 import org.apache.spark.shuffle.{ShuffleManager, ShuffleWriteMetricsReporter}
+import org.apache.spark.storage.BlockManagerMessages.ReplicateBlock
 import org.apache.spark.storage.memory._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.util._
@@ -240,6 +239,8 @@ private[spark] class BlockManager(
   private var lastPeerFetchTimeNs = 0L
 
   private var blockReplicationPolicy: BlockReplicationPolicy = _
+
+  private var blockManagerDecommissioning: Boolean = false
 
   // A DownloadFileManager used to track all the files of remote blocks which are above the
   // specified memory threshold. Files will be deleted automatically based on weak reference.
@@ -1260,6 +1261,8 @@ private[spark] class BlockManager(
       level: StorageLevel,
       tellMaster: Boolean = true): Boolean = {
     require(bytes != null, "Bytes is null")
+    require(!blockManagerDecommissioning, "This block manager is in decommissioning " +
+      "state and can't be used to store new blocks")
     val blockStoreUpdater =
       ByteBufferBlockStoreUpdater(blockId, level, implicitly[ClassTag[T]], bytes, tellMaster)
     blockStoreUpdater.save()
@@ -1560,9 +1563,13 @@ private[spark] class BlockManager(
   def replicateBlock(
       blockId: BlockId,
       existingReplicas: Set[BlockManagerId],
-      maxReplicas: Int): Unit = {
+      maxReplicas: Int,
+      forceFetch: Boolean = true,
+      maxReplicationFailures: Option[Int] = None): Boolean = {
+    var replicatedSuccessfully = true
     logInfo(s"Using $blockManagerId to pro-actively replicate $blockId")
     blockInfoManager.lockForReading(blockId).foreach { info =>
+      replicatedSuccessfully = false
       val data = doGetLocalBytes(blockId, info)
       val storageLevel = StorageLevel(
         useDisk = info.level.useDisk,
@@ -1570,16 +1577,16 @@ private[spark] class BlockManager(
         useOffHeap = info.level.useOffHeap,
         deserialized = info.level.deserialized,
         replication = maxReplicas)
-      // we know we are called as a result of an executor removal, so we refresh peer cache
-      // this way, we won't try to replicate to a missing executor with a stale reference
-      getPeers(forceFetch = true)
+      getPeers(forceFetch)
       try {
-        replicate(blockId, data, storageLevel, info.classTag, existingReplicas)
+        replicatedSuccessfully = replicate(
+          blockId, data, storageLevel, info.classTag, existingReplicas, maxReplicationFailures)
       } finally {
         logDebug(s"Releasing lock for $blockId")
         releaseLockAndDispose(blockId, data)
       }
     }
+    replicatedSuccessfully
   }
 
   /**
@@ -1591,9 +1598,11 @@ private[spark] class BlockManager(
       data: BlockData,
       level: StorageLevel,
       classTag: ClassTag[_],
-      existingReplicas: Set[BlockManagerId] = Set.empty): Unit = {
+      existingReplicas: Set[BlockManagerId] = Set.empty,
+      maxReplicationFailures: Option[Int] = None): Boolean = {
 
-    val maxReplicationFailures = conf.get(config.STORAGE_MAX_REPLICATION_FAILURE)
+    val maxReplicationFailureCount = maxReplicationFailures.getOrElse(
+      conf.get(config.STORAGE_MAX_REPLICATION_FAILURE))
     val tLevel = StorageLevel(
       useDisk = level.useDisk,
       useMemory = level.useMemory,
@@ -1617,7 +1626,7 @@ private[spark] class BlockManager(
       blockId,
       numPeersToReplicateTo)
 
-    while(numFailures <= maxReplicationFailures &&
+    while(numFailures <= maxReplicationFailureCount &&
       !peersForReplication.isEmpty &&
       peersReplicatedTo.size < numPeersToReplicateTo) {
       val peer = peersForReplication.head
@@ -1665,9 +1674,11 @@ private[spark] class BlockManager(
     if (peersReplicatedTo.size < numPeersToReplicateTo) {
       logWarning(s"Block $blockId replicated to only " +
         s"${peersReplicatedTo.size} peer(s) instead of $numPeersToReplicateTo peers")
+      return false
     }
 
-    logDebug(s"block $blockId replicated to ${peersReplicatedTo.mkString(", ")}")
+    logInfo(s"block $blockId replicated to ${peersReplicatedTo.mkString(", ")}")
+    return true
   }
 
   /**
@@ -1759,6 +1770,55 @@ private[spark] class BlockManager(
     val blocksToRemove = blockInfoManager.entries.flatMap(_._1.asRDDId).filter(_.rddId == rddId)
     blocksToRemove.foreach { blockId => removeBlock(blockId, tellMaster = false) }
     blocksToRemove.size
+  }
+
+  def decommissionBlockManager(): Unit = {
+    if (!blockManagerDecommissioning) {
+      logInfo("Starting block manager decommissioning process")
+      blockManagerDecommissioning = true
+      val cacheTransferThread = new Thread() {
+        override def run(): Unit = {
+          var currentAttempt = 0
+          val maxDecommissionReattempts = conf.get(config.STORAGE_DECOMMISSION_REATTEMPTS)
+          while (blockManagerDecommissioning && currentAttempt < maxDecommissionReattempts) {
+            currentAttempt += 1
+            logInfo(s"Starting attempt $currentAttempt")
+            replicateRddCacheBlocks()
+            Thread.sleep(30000)
+          }
+        }
+      }
+      cacheTransferThread.setDaemon(true)
+      cacheTransferThread.setName("cache-replication-thread")
+      cacheTransferThread.start()
+    }
+  }
+
+  private def replicateRddCacheBlocks(): Unit = {
+    val replicateBlocksInfo: Seq[ReplicateBlock] =
+      master.getReplicateInfoForRDDBlocks(blockManagerId)
+
+    val maxReplicationFailures = conf.get(
+      config.STORAGE_DECOMMISSION_MAX_REPLICATION_FAILURE)
+    var replicatedAllBlocks = true
+    var forceFetchAlreadyDone = false
+
+    val blocksFailedReplication = replicateBlocksInfo.filterNot {
+      case ReplicateBlock(blockId, existingReplicas, maxReplicas) =>
+        val replicatedSuccessfully = replicateBlock(blockId, existingReplicas.toSet,
+          maxReplicas, !forceFetchAlreadyDone, Some(maxReplicationFailures))
+        forceFetchAlreadyDone = true
+        if (replicatedSuccessfully) {
+          logInfo(s"Block $blockId offloaded successfully, Removing block now.")
+          removeBlock(blockId)
+        } else {
+          replicatedAllBlocks = false
+          logWarning(s"Failed to offload block $blockId")
+        }
+        replicatedSuccessfully
+    }
+    logInfo(s"Attempt to replicate all blocks done." +
+      s" Blocks failed for replication: ${blocksFailedReplication.mkString(",")}")
   }
 
   /**

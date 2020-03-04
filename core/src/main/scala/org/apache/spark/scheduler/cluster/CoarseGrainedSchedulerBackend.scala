@@ -432,6 +432,17 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
             logError(s"Unexpected error during decommissioning ${e.toString}", e)
         }
         logInfo(s"Finished decommissioning executor $executorId.")
+
+        try {
+          logInfo(s"Starting decommissioning block manager corresponding to " +
+            s"executor $executorId.")
+          scheduler.sc.env.blockManager.master.decommissionBlockManagers(Seq(executorId))
+        } catch {
+          case e: Exception =>
+            logError(s"Unexpected error during block manager " +
+              s"decommissioning for executor $executorId: ${e.toString}", e)
+        }
+        logInfo(s"Finished decommissioning block manager corresponding to $executorId.")
       } else {
         logInfo(s"Skipping decommissioning of executor $executorId.")
       }

@@ -24,7 +24,7 @@ import scala.concurrent.Future
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.RpcEndpointRef
-import org.apache.spark.storage.BlockManagerMessages._
+import org.apache.spark.storage.BlockManagerMessages.{DecommissionBlockManagers, _}
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
 
 private[spark]
@@ -42,6 +42,17 @@ class BlockManagerMaster(
     tell(RemoveExecutor(execId))
     logInfo("Removed " + execId + " successfully in removeExecutor")
   }
+
+  def decommissionBlockManagers(executorIds: Seq[String]): Unit = {
+    driverEndpoint.ask[Unit](DecommissionBlockManagers(executorIds))
+  }
+
+  def getReplicateInfoForRDDBlocks(
+      blockManagerId: BlockManagerId): Seq[ReplicateBlock] = {
+    driverEndpoint.askSync[Seq[ReplicateBlock]](
+      GetReplicateInfoForRDDBlocks(blockManagerId))
+  }
+
 
   /** Request removal of a dead executor from the driver endpoint.
    *  This is only called on the driver side. Non-blocking

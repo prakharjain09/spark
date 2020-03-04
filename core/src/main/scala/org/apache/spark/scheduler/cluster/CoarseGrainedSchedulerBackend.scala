@@ -19,18 +19,17 @@ package org.apache.spark.scheduler.cluster
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
+
 import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.mutable.{HashMap, HashSet}
 import scala.concurrent.Future
-
 import org.apache.hadoop.security.UserGroupInformation
-
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.deploy.security.HadoopDelegationTokenManager
 import org.apache.spark.executor.ExecutorLogUrlHandler
-import org.apache.spark.internal.Logging
+import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.internal.config._
 import org.apache.spark.internal.config.Network._
 import org.apache.spark.resource.ResourceProfile
@@ -433,16 +432,18 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         }
         logInfo(s"Finished decommissioning executor $executorId.")
 
-        try {
-          logInfo(s"Starting decommissioning block manager corresponding to " +
-            s"executor $executorId.")
-          scheduler.sc.env.blockManager.master.decommissionBlockManagers(Seq(executorId))
-        } catch {
-          case e: Exception =>
-            logError(s"Unexpected error during block manager " +
-              s"decommissioning for executor $executorId: ${e.toString}", e)
+        if (conf.get(config.STORAGE_DECOMMISSION_ENABLED)) {
+          try {
+            logInfo(s"Starting decommissioning block manager corresponding to " +
+              s"executor $executorId.")
+            scheduler.sc.env.blockManager.master.decommissionBlockManagers(Seq(executorId))
+          } catch {
+            case e: Exception =>
+              logError(s"Unexpected error during block manager " +
+                s"decommissioning for executor $executorId: ${e.toString}", e)
+          }
+          logInfo(s"Finished decommissioning block manager corresponding to $executorId.")
         }
-        logInfo(s"Finished decommissioning block manager corresponding to $executorId.")
       } else {
         logInfo(s"Skipping decommissioning of executor $executorId.")
       }
@@ -579,7 +580,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
    */
   private[spark] def decommissionExecutor(executorId: String): Unit = {
     if (driverEndpoint != null) {
-      logInfo("Propegating executor decommission to driver.")
+      logInfo("Propogating executor decommission to driver.")
       driverEndpoint.send(DecommissionExecutor(executorId))
     }
   }

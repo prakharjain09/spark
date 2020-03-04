@@ -25,14 +25,16 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Random
+
 import com.google.common.cache.CacheBuilder
+
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.network.shuffle.ExternalBlockStoreClient
 import org.apache.spark.rpc.{IsolatedRpcEndpoint, RpcCallContext, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler._
-import org.apache.spark.storage.BlockManagerMessages.{ReplicateBlocks, StopAcceptingNewBlocks, _}
+import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{RpcUtils, ThreadUtils, Utils}
 
 /**
@@ -267,6 +269,7 @@ class BlockManagerMasterEndpoint(
 
     // Remove the block manager from blockManagerIdByExecutor.
     blockManagerIdByExecutor -= blockManagerId.executorId
+    decommissioningBlockManagerSet.remove(blockManagerId)
 
     // Remove it from blockManagerInfo and remove all the blocks.
     blockManagerInfo.remove(blockManagerId)
@@ -585,7 +588,11 @@ class BlockManagerMasterEndpoint(
   private def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {
     val blockManagerIds = blockManagerInfo.keySet
     if (blockManagerIds.contains(blockManagerId)) {
-      blockManagerIds.filterNot { _.isDriver }.filterNot { _ == blockManagerId }.toSeq
+      blockManagerIds
+        .filterNot { _.isDriver }
+        .filterNot { _ == blockManagerId }
+        .diff(decommissioningBlockManagerSet)
+        .toSeq
     } else {
       Seq.empty
     }

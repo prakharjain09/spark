@@ -1782,8 +1782,15 @@ private[spark] class BlockManager(
           val maxDecommissionReattempts = conf.get(config.STORAGE_DECOMMISSION_REATTEMPTS)
           while (blockManagerDecommissioning && currentAttempt < maxDecommissionReattempts) {
             currentAttempt += 1
-            logInfo(s"Starting attempt $currentAttempt")
-            replicateRddCacheBlocks()
+            logInfo(s"Starting attempt $currentAttempt to replicate all cached RDD blocks")
+            try {
+              replicateRddCacheBlocks()
+            } catch {
+              case NonFatal(e) =>
+                throw new Exception("Error occurred while trying to " +
+                  "replicate cached RDD blocks for block manager decommissioning", e)
+            }
+            logInfo(s"Attempt to replicate all cached blocks done")
             Thread.sleep(30000)
           }
         }
@@ -1798,27 +1805,35 @@ private[spark] class BlockManager(
     val replicateBlocksInfo: Seq[ReplicateBlock] =
       master.getReplicateInfoForRDDBlocks(blockManagerId)
 
+    if (replicateBlocksInfo.nonEmpty) {
+      logInfo(s"Need to replicate ${replicateBlocksInfo.size} blocks " +
+        s"for block manager decommissioning")
+      // Refresh peer list once before starting replication
+      getPeers(true)
+    }
     val maxReplicationFailures = conf.get(
       config.STORAGE_DECOMMISSION_MAX_REPLICATION_FAILURE)
-    var replicatedAllBlocks = true
-    var forceFetchAlreadyDone = false
 
     val blocksFailedReplication = replicateBlocksInfo.filterNot {
       case ReplicateBlock(blockId, existingReplicas, maxReplicas) =>
-        val replicatedSuccessfully = replicateBlock(blockId, existingReplicas.toSet,
-          maxReplicas, !forceFetchAlreadyDone, Some(maxReplicationFailures))
-        forceFetchAlreadyDone = true
+        val replicatedSuccessfully = replicateBlock(
+          blockId,
+          existingReplicas.toSet,
+          maxReplicas,
+          forceFetch = false,
+          maxReplicationFailures = Some(maxReplicationFailures))
         if (replicatedSuccessfully) {
-          logInfo(s"Block $blockId offloaded successfully, Removing block now.")
+          logInfo(s"Block $blockId offloaded successfully, Removing block now")
           removeBlock(blockId)
+          logInfo(s"Block $blockId removed")
         } else {
-          replicatedAllBlocks = false
           logWarning(s"Failed to offload block $blockId")
         }
         replicatedSuccessfully
     }
-    logInfo(s"Attempt to replicate all blocks done." +
-      s" Blocks failed for replication: ${blocksFailedReplication.mkString(",")}")
+    if (blocksFailedReplication.nonEmpty) {
+      logWarning(s" Blocks failed for replication: ${blocksFailedReplication.mkString(",")}")
+    }
   }
 
   /**

@@ -1261,8 +1261,6 @@ private[spark] class BlockManager(
       level: StorageLevel,
       tellMaster: Boolean = true): Boolean = {
     require(bytes != null, "Bytes is null")
-    require(!blockManagerDecommissioning, "This block manager is in decommissioning " +
-      "state and can't be used to store new blocks")
     val blockStoreUpdater =
       ByteBufferBlockStoreUpdater(blockId, level, implicitly[ClassTag[T]], bytes, tellMaster)
     blockStoreUpdater.save()
@@ -1284,6 +1282,9 @@ private[spark] class BlockManager(
 
     require(blockId != null, "BlockId is null")
     require(level != null && level.isValid, "StorageLevel is null or invalid")
+    if (blockManagerDecommissioning && blockId.isRDD) {
+      throw new RDDBlockSavedOnDecommissionedBlockManagerException(blockId.asRDDId.get)
+    }
 
     val putBlockInfo = {
       val newInfo = new BlockInfo(level, classTag, tellMaster)
@@ -1801,7 +1802,8 @@ private[spark] class BlockManager(
     }
   }
 
-  private def replicateRddCacheBlocks(): Unit = {
+  // Visible for testing
+  def replicateRddCacheBlocks(): Unit = {
     val replicateBlocksInfo: Seq[ReplicateBlock] =
       master.getReplicateInfoForRDDBlocks(blockManagerId)
 

@@ -77,7 +77,6 @@ abstract class Optimizer(catalogManager: CatalogManager)
         PushLeftSemiLeftAntiThroughJoin,
         LimitPushDown,
         ColumnPruning,
-        InferFiltersFromConstraints,
         // Operator combine
         CollapseRepartition,
         CollapseProject,
@@ -110,15 +109,18 @@ abstract class Optimizer(catalogManager: CatalogManager)
         CombineConcats) ++
         extendedOperatorOptimizationRules
 
+    val inferFiltersRuleSet = Seq(
+      InferFiltersFromConstraints,
+      InferFiltersFromDisjunctions
+    )
+
     val operatorOptimizationBatch: Seq[Batch] = {
-      val rulesWithoutInferFiltersFromConstraints =
-        operatorOptimizationRuleSet.filterNot(_ == InferFiltersFromConstraints)
       Batch("Operator Optimization before Inferring Filters", fixedPoint,
-        rulesWithoutInferFiltersFromConstraints: _*) ::
+        operatorOptimizationRuleSet: _*) ::
       Batch("Infer Filters", Once,
-        InferFiltersFromConstraints) ::
+        inferFiltersRuleSet: _*) ::
       Batch("Operator Optimization after Inferring Filters", fixedPoint,
-        rulesWithoutInferFiltersFromConstraints: _*) :: Nil
+        operatorOptimizationRuleSet: _*) :: Nil
     }
 
     val batches = (Batch("Eliminate Distinct", Once, EliminateDistinct) ::

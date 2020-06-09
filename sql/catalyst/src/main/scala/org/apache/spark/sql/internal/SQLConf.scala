@@ -545,6 +545,14 @@ object SQLConf {
     .booleanConf
     .createWithDefault(true)
 
+  val INFER_FILTERS_FROM_DISJUNCTIONS_ENABLED =
+    buildConf("spark.sql.inferFiltersFromDisjunctions.enabled")
+      .internal()
+      .doc("When true, the query optimizer will try to infer filters from disjunctions which can" +
+        " be pushed down through join")
+      .booleanConf
+      .createWithDefault(true)
+
   val ESCAPED_STRING_LITERALS = buildConf("spark.sql.parser.escapedStringLiterals")
     .internal()
     .doc("When true, string literals (including regex patterns) remain escaped in our SQL " +
@@ -2868,6 +2876,8 @@ class SQLConf extends Serializable with Logging {
   def caseSensitiveAnalysis: Boolean = getConf(SQLConf.CASE_SENSITIVE)
 
   def constraintPropagationEnabled: Boolean = getConf(CONSTRAINT_PROPAGATION_ENABLED)
+
+  def inferFilterFromDisjunctionsEnabled: Boolean = getConf(INFER_FILTERS_FROM_DISJUNCTIONS_ENABLED)
 
   def escapedStringLiterals: Boolean = getConf(ESCAPED_STRING_LITERALS)
 

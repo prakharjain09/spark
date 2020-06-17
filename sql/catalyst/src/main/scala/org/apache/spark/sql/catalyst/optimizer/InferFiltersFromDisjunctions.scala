@@ -28,8 +28,8 @@ import org.apache.spark.sql.internal.SQLConf
  * remaining non-pushable filters
  * Ex- Filter(t1.c1 > 2 && t2.c1 < 5 && ( (t1.c2 > 5 && t2.c2 > 4) || (t1.c3 > 20 && t2.c3 > 6) ))
  *                                               |
- *                                               Join
- *                                            left  right
+ *                                              Join
+ *                                          left    right
  *
  * Here t1.c1 > 2 can be pushed down to left
  *      t2.c1 < 5 can be pushed down to right
@@ -45,11 +45,11 @@ object InferFiltersFromDisjunctions extends Rule[LogicalPlan]
    * Filters out deterministic predicates which contains references
    *   from both left and right logical plan
    */
-  private def getNonPushableDeterministicPredicates(predicates: Seq[Expression],
-                                                    left: LogicalPlan,
-                                                    right: LogicalPlan): Seq[Expression] = {
-    val deterministicPredicates = predicates.filter(_.deterministic)
-    deterministicPredicates.filterNot { pred =>
+  private def getNonPushableDeterministicPredicates(
+      predicates: Seq[Expression],
+      left: LogicalPlan,
+      right: LogicalPlan): Seq[Expression] = {
+    predicates.filter(_.deterministic).filterNot { pred =>
       pred.references.subsetOf(left.outputSet) || pred.references.subsetOf(right.outputSet)
     }
   }
@@ -61,16 +61,32 @@ object InferFiltersFromDisjunctions extends Rule[LogicalPlan]
    * tries to infer new predicates which can be pushed down from it.
    * Ex - Say left=t1, right=t2 and
    * predicatesInConjunction =Seq(
-   *     (t1.c1 > 2 && t2.c1 < 5),
    *     ((t1.c2 > 5 && t2.c2 > 4) || (t1.c3 > 20 && t2.c3 > 6))
    *   )
    *
    * In this case, predicates that can be inferred for left: (t1.c2 > 5 || t1.c3 > 20)
    * predicates that can be inferred for right: (t2.c2 > 4 || t2.c3 > 6)
+   *
+   * This function basically works using following recursion:
+   * InferFilters(predicate: Predicate, plan: LogicalPlan) = Infer extra predicates from given
+   *   `predicate` which are applicable for `plan` LogicalPlan
+   *
+   * InferFilters(predicate, plan) = predicate match {
+   *     case P1 OR P2 => InferFilters(P1, plan) OR InferFilters(P2, plan)
+   *     case P1 AND P2 => InferFilters(P1, plan) AND InferFilters(P2, plan)
+   *     case _ =>
+   *         if (predicate.references.subSetOf(plan.output)) {
+   *           predicate
+   *         } else {
+   *           True
+   *         }
+   * }
+   *
    */
-  private def inferFiltersForPushown(predicatesInConjunction: Seq[Expression],
-                                     left: LogicalPlan,
-                                     right: LogicalPlan): (Seq[Expression], Seq[Expression]) = {
+  private def inferFiltersForPushown(
+      predicatesInConjunction: Seq[Expression],
+      left: LogicalPlan,
+      right: LogicalPlan): (Seq[Expression], Seq[Expression]) = {
     val extraFiltersInferredTupples = predicatesInConjunction.map { cond =>
       val allOrPredicates = splitDisjunctivePredicates(cond)
       if (allOrPredicates.size >= 2) {

@@ -132,7 +132,7 @@ class InferFiltersFromDisjunctionsSuite extends PlanTest {
     ("leftouter", false, true),
     ("rightouter", true, false)
   ).foreach { case (joinTypeStr, pushdownExpectedOnLeft, pushdownExpectedOnRight) =>
-    test(s"filters inferred in $joinTypeStr join," +
+    test(s"filters inferred from join condition in $joinTypeStr join," +
       s" pushdownExpectedOnLeft: $pushdownExpectedOnLeft, " +
       s"pushdownExpectedOnRight: $pushdownExpectedOnRight") {
       withSQLConf(SQLConf.INFER_FILTERS_FROM_DISJUNCTIONS_ENABLED.key -> "true") {

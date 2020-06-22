@@ -206,4 +206,24 @@ class ReuseExchangeAndSubquerySuite extends QueryTest with SharedSparkSession {
       }
     }
   }
+
+
+  test("test reuse in nested subqueries") {
+    withSQLConf(SQLConf.EXCHANGE_REUSE_ENABLED.key -> "true") {
+      withSQLConf(SQLConf.SUBQUERY_REUSE_ENABLED.key -> "true") {
+        val df = sql(
+          """
+            | WITH view1 as (
+            |   SELECT ((SELECT max(product_id) FROM fact_stats) + (SELECT min(product_id) FROM fact_stats)) temp
+            |   FROM fact_stats
+            | )
+            | SELECT (SELECT max(temp) FROM view1) + (SELECT min(temp) FROM view1)
+          """.stripMargin)
+        // view1 has 2 subqueries (S1, S2).
+        // Final query is: SELECT scala_subquery_on_v1, other_scala_subquery_on_v1
+        // So the inner subqueries S1 and S2 should be reused once
+        validateReuseExchangesAndReuseSubqueries(df.queryExecution.executedPlan, 0, 0, 2)
+      }
+    }
+  }
 }

@@ -148,20 +148,27 @@ case class ReuseExchangeAndSubquery(conf: SQLConf) extends Rule[SparkPlan] {
     def processExpressionsForReuse(node: SparkPlan): SparkPlan = {
       node.transformExpressions {
         case in: InSubqueryExec =>
-          val inSubqueryExecPlan = in.plan.transformUp {
-            case exchange: Exchange => reuseExchange(exchange)
-          }
+          val inSubqueryExecPlan = processPlanForReuse(in.plan)
           reuseSubquery(in.copy(plan = inSubqueryExecPlan.asInstanceOf[BaseSubqueryExec]))
         case sub: ExecSubqueryExpression =>
-          reuseSubquery(sub)
+          val subqueryPlan = processPlanForReuse(sub.plan)
+          if (sub.plan.fastEquals(subqueryPlan)) {
+            reuseSubquery(sub)
+          } else {
+            reuseSubquery(sub.withNewPlan(plan = subqueryPlan.asInstanceOf[BaseSubqueryExec]))
+          }
       }
     }
 
-    plan.transformUp {
-      case exchange: Exchange =>
-        reuseExchange(exchange)
-      case other =>
-        processExpressionsForReuse(other)
+    def processPlanForReuse(node: SparkPlan): SparkPlan = {
+      node.transformUp {
+        case exchange: Exchange =>
+          reuseExchange(exchange)
+        case other =>
+          processExpressionsForReuse(other)
+      }
     }
+
+    processPlanForReuse(plan)
   }
 }

@@ -109,6 +109,35 @@ class PruneFileSourcePartitionsSuite extends PrunePartitionSuiteBase {
     }
   }
 
+  test("column level stats should be retained after PruneFileSourcePartitions rule") {
+    withSQLConf("spark.sql.cbo.enabled" -> "true") {
+      withTable("tbl") {
+        spark.range(10).selectExpr("id", "id % 5 as p").write.partitionBy("p").saveAsTable("tbl")
+        // Compute table and column level stats
+        sql(s"ANALYZE TABLE tbl COMPUTE STATISTICS noscan")
+        sql(s"ANALYZE TABLE tbl COMPUTE STATISTICS for columns id,p")
+
+        // Check stats are updated in tablemetadata
+        val tableStats = spark.sessionState.catalog.getTableMetadata(TableIdentifier("tbl")).stats
+        assert(tableStats.isDefined && tableStats.get.sizeInBytes > 0, "tableStats are not present")
+        assert(tableStats.get.colStats.nonEmpty, "colstats are not present")
+        assert(tableStats.get.rowCount.nonEmpty, "row count is not present")
+        assert(tableStats.get.rowCount.get == BigInt(10), "row count incorrect")
+
+        val df = sql("SELECT * FROM tbl WHERE p = 1")
+
+        // Check column level stats are present in optimized plan
+        val relationStats2 = df.queryExecution.optimizedPlan.collect {
+          case relation: LogicalRelation => relation.stats
+        }
+        assert(relationStats2.size === 1, s"Size wrong for:\n ${df.queryExecution}")
+        assert(relationStats2(0).attributeStats.nonEmpty)
+        assert(relationStats2(0).rowCount.nonEmpty, "row count not present")
+        assert(relationStats2(0).rowCount.get == BigInt(2), "row count incorrect")
+      }
+    }
+  }
+
   override def getScanExecPartitionSize(plan: SparkPlan): Long = {
     plan.collectFirst {
       case p: FileSourceScanExec => p

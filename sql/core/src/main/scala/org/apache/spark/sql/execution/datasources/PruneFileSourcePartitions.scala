@@ -99,8 +99,24 @@ private[sql] object PruneFileSourcePartitions
         val prunedFsRelation =
           fsRelation.copy(location = prunedFileIndex)(fsRelation.sparkSession)
         // Change table stats based on the sizeInBytes of pruned files
-        val withStats = logicalRelation.catalogTable.map(_.copy(
-          stats = Some(CatalogStatistics(sizeInBytes = BigInt(prunedFileIndex.sizeInBytes)))))
+        val newStats = logicalRelation.catalogTable match {
+          case Some(ct) if ct.stats.nonEmpty =>
+            val oldStats = ct.stats.get
+            val newRowCount = if (prunedFileIndex.sizeInBytes == 0) {
+              // pruned file index doesn't have any file. so row Count = 0
+              oldStats.rowCount.map(_ => BigInt(0))
+            } else if (oldStats.sizeInBytes == 0) {
+              // code flow coming here means oldStats.sizeInBytes is 0 while prunedSizeInBytes is
+              // not zero. This should not be possible idealy - don't change anything in this case
+              oldStats.rowCount
+            } else {
+              oldStats.rowCount.map(_ / (oldStats.sizeInBytes / prunedFileIndex.sizeInBytes))
+            }
+            oldStats.copy(sizeInBytes = BigInt(prunedFileIndex.sizeInBytes), rowCount = newRowCount)
+          case _ =>
+            CatalogStatistics(sizeInBytes = BigInt(prunedFileIndex.sizeInBytes))
+        }
+        val withStats = logicalRelation.catalogTable.map(_.copy(stats = Some(newStats)))
         val prunedLogicalRelation = logicalRelation.copy(
           relation = prunedFsRelation, catalogTable = withStats)
         // Keep partition-pruning predicates so that they are visible in physical planning

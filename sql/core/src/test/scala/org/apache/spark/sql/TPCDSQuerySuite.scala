@@ -34,7 +34,9 @@ class TPCDSQuerySuite extends BenchmarkQueryTest with TPCDSBase {
       classLoader = Thread.currentThread().getContextClassLoader)
     test(name) {
       // check the plans can be properly generated
-      val plan = sql(queryString).queryExecution.executedPlan
+      val qe = sql(queryString).queryExecution
+      val plan = qe.executedPlan
+      qe.tracker.phases.foreach{case (x, y) => println(s"$x: $y") }
       checkGeneratedCode(plan)
     }
   }

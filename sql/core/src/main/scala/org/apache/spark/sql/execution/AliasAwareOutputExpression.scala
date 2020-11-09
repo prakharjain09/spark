@@ -62,11 +62,13 @@ trait AliasAwareOutputOrdering extends AliasAwareOutputExpression {
 
   final override def outputOrdering: Seq[SortOrder] = {
     if (hasAlias) {
-      orderingExpressions.map { s =>
-        s.child match {
-          case a: AttributeReference => s.copy(child = replaceAlias(a).getOrElse(a))
-          case _ => s
-        }
+      def normalizeExprs(expr: Expression): Expression = expr.transformDown {
+        case attr: AttributeReference => replaceAlias(attr).getOrElse(attr)
+      }
+      orderingExpressions.map { sortOrder =>
+        val normalizedSameOrderExpressions = sortOrder.sameOrderExpressions.map(normalizeExprs)
+        val newSortOrder = normalizeExprs(sortOrder).asInstanceOf[SortOrder]
+        newSortOrder.copy(sameOrderExpressions = normalizedSameOrderExpressions)
       }
     } else {
       orderingExpressions
